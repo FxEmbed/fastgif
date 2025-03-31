@@ -8,6 +8,8 @@ use axum::{
 };
 use bytes::Bytes;
 use std::process::Stdio;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::fs as tokio_fs;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::Command as TokioCommand,
@@ -22,7 +24,7 @@ async fn main() -> Result<()> {
     info!("Starting FastGIF server");
     // Build our application with a route
     let app = Router::new()
-        .route("/*path", get(handle_tweet_video))
+        .route("/tweet_video/:path", get(handle_tweet_video))
         .layer(TraceLayer::new_for_http());
 
     // Run it with hyper on localhost:3000
@@ -38,7 +40,22 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     
     match process_video_to_gif(&path).await {
         Ok(gif_data) => {
-            info!("Successfully converted video to GIF");
+            info!("Successfully converted video to GIF ({} bytes)", gif_data.len());
+
+            // --- DEBUG: Save collected bytes to a file --- 
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let debug_filename = format!("/tmp/fastgif_debug_{}_{}.gif", 
+                path.split('/').last().unwrap_or("unknown").replace(".mp4", ""), 
+                timestamp);
+            info!("Saving debug GIF to: {}", debug_filename);
+            match tokio_fs::write(&debug_filename, &gif_data).await {
+                Ok(_) => info!("Successfully saved debug GIF."),
+                Err(e) => error!("Failed to save debug GIF: {}", e),
+            }
+            // --- END DEBUG ---
             
             (
                 StatusCode::OK,
@@ -59,7 +76,7 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
 }
 
 async fn process_video_to_gif(path: &str) -> Result<Bytes> {
-    let video_url = format!("https://video.twimg.com/{}", path);
+    let video_url = format!("https://video.twimg.com/tweet_video/{}", path);
     info!("Processing video from URL: {}", video_url);
     
     // Try the direct FFmpeg download and pipe approach
@@ -83,7 +100,7 @@ async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
     // Set up gifski process to read yuv4mpegpipe frames from stdin and output to stdout
     let mut gifski_process = TokioCommand::new("gifski")
         .args([
-            "--output", "/dev/stdout",       // Output to stdout
+            "--output", "-", 
             "-"                    // Read from stdin
         ])
         .stdin(Stdio::piped())
@@ -123,6 +140,7 @@ async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
     });
 
     // Task to read gifski stdout (the final GIF data)
+    // Spawned concurrently with the pipe_handle
     let collect_handle = tokio::spawn(async move {
         info!("Starting to collect gifski output");
         let mut gif_data = Vec::new();
@@ -163,33 +181,34 @@ async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
     });
 
 
-    // --- Wait for all operations ---
+    // --- Wait for all operations (Concurrent Handling) ---
 
-    // Wait for the piping to complete
-    pipe_handle.await??; // Double '?' to handle JoinError and the inner Result
-    info!("Pipe operation completed successfully.");
+    // Wait for the piping and collection tasks to complete.
+    // It's often better to wait for results before waiting for process exit,
+    // especially if process exit status depends on pipes being fully read/closed.
+    let pipe_result = pipe_handle.await?;
+    let collect_result = collect_handle.await?;
 
-    // Wait for gifski to finish and collect its output
-    let gif_data = collect_handle.await??;
-    info!("GIF data collection completed successfully.");
+    // Check results from tasks first
+    pipe_result?; // Propagate error from piping
+    let gif_data = collect_result?; // Propagate error from collection & get data
+    info!("Pipe and collect tasks completed successfully.");
 
-
-    // Wait for the processes to exit and check their statuses
+    // Now, wait for the processes to exit and check their statuses.
     let ffmpeg_status = ffmpeg_process.wait().await?;
     info!("ffmpeg process exited with status: {}", ffmpeg_status);
     if !ffmpeg_status.success() {
-        // Stderr is now logged concurrently, but we still signal failure
         return Err(anyhow!("FFmpeg process failed with exit code: {:?}", ffmpeg_status.code()));
     }
 
     let gifski_status = gifski_process.wait().await?;
     info!("gifski process exited with status: {}", gifski_status);
     if !gifski_status.success() {
-        // Stderr is now logged concurrently
         return Err(anyhow!("gifski process failed with exit code: {:?}", gifski_status.code()));
     }
+    info!("ffmpeg and gifski processes completed successfully.");
 
-    // Wait for stderr logging tasks to finish (optional, but good practice)
+    // Wait for stderr logging tasks to finish.
     ffmpeg_stderr_handle.await?;
     gifski_stderr_handle.await?;
     info!("Stderr monitoring tasks finished.");
