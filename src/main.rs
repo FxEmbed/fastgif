@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use axum::{
     extract::Path,
-    http::StatusCode,
+    http::{StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -18,12 +18,12 @@ use tracing::{error, info};
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
-    tracing_subscriber::fmt::init();
     info!("Starting FastGIF server");
 
     // Our router
     let app = Router::new()
-        .route("/tweet_video/:path", get(handle_tweet_video))
+        .route("/tweet_video/{path}", get(handle_tweet_video))
+        .fallback(handle_not_found)
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -31,6 +31,11 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+// Define the 404 handler function
+async fn handle_not_found(uri: Uri) -> impl IntoResponse {
+    (StatusCode::NOT_FOUND, format!("404 Not Found: {}", uri))
 }
 
 async fn handle_tweet_video(Path(path): Path<String>) -> Response {
