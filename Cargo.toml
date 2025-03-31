@@ -6,10 +6,9 @@ authors = ["dangered wolf"]
 description = "A service that converts Twitter video URLs to GIFs"
 
 [dependencies]
-tokio = { version = "1.34", features = ["rt-multi-thread", "net", "process", "io-util"] }
-axum = { version = "0.7", features = ["full"] }
-tower-http = { version = "0.5", features = ["trace"] }
-anyhow = "1.0"
+tokio = { version = "1.44", features = ["rt-multi-thread", "net", "process", "io-util"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+anyhow = { version = "1.0", default-features = false }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bytes = "1.5"
+bytes = "1.10"
