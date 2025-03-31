@@ -84,10 +84,9 @@ async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
     // Set up gifski process to read yuv4mpegpipe frames from stdin
     let mut gifski_process = TokioCommand::new("gifski")
         .args([
-            "--quality", "90",
-            "--fps", "25",
             "--fast",
-            "-o",
+            "--output",
+            "/dev/stdout",
             "-"
         ])
         .stdin(Stdio::piped())
