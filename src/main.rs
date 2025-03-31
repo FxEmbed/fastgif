@@ -7,39 +7,21 @@ use axum::{
     Router,
 };
 use bytes::Bytes;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command as TokioCommand,
 };
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
-use reqwest;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    info!("hello world!");
     // Initialize tracing
     tracing_subscriber::fmt::init();
     info!("Starting FastGIF server");
-
-    // Check if FFmpeg is available
-    match Command::new("ffmpeg").arg("-version").output() {
-        Ok(_) => info!("FFmpeg is available"),
-        Err(e) => {
-            error!("FFmpeg not found: {}", e);
-            return Err(anyhow!("FFmpeg not found, please install FFmpeg"));
-        }
-    }
-
-    // Check if gifski is available
-    match Command::new("gifski").arg("--version").output() {
-        Ok(_) => info!("gifski is available"),
-        Err(e) => {
-            error!("gifski not found: {}", e);
-            return Err(anyhow!("gifski not found, please install gifski"));
-        }
-    }
-
     // Build our application with a route
     let app = Router::new()
         .route("/*path", get(handle_tweet_video))
@@ -55,12 +37,14 @@ async fn main() -> Result<()> {
 
 async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     info!("Processing video: {}", path);
+    
     match process_video_to_gif(&path).await {
         Ok(gif_data) => {
             info!("Successfully converted video to GIF");
+            
             (
                 StatusCode::OK,
-                [("Content-Type", "image/gif")],
+                [("Content-Type", "image/gif"), ("Cache-Control", "public, max-age=31536000")],
                 gif_data,
             )
                 .into_response()
@@ -78,90 +62,114 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
 
 async fn process_video_to_gif(path: &str) -> Result<Bytes> {
     let video_url = format!("https://video.twimg.com/{}", path);
-    info!("Downloading video from {}", video_url);
-
-    // First download the video file to a temporary file with proper extension
-    let client = reqwest::Client::new();
-    let response = client.get(&video_url)
-        .send()
-        .await?;
+    info!("Processing video from URL: {}", video_url);
     
-    if !response.status().is_success() {
-        return Err(anyhow!("Failed to download video, status: {}", response.status()));
-    }
-    
-    // Determine extension from content type
-    let content_type = response.headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("video/mp4");
-    
-    let extension = if content_type.contains("mp4") {
-        "mp4"
-    } else if content_type.contains("webm") {
-        "webm"
-    } else {
-        "mp4" // Default to mp4
-    };
-    
-    // Save the video to a temporary file with proper extension
-    let temp_dir = tempfile::tempdir()?;
-    let video_path = temp_dir.path().join(format!("input.{}", extension));
-    let video_path_str = video_path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
-    
-    let video_data = response.bytes().await?;
-    let mut video_file = tokio::fs::File::create(&video_path).await?;
-    tokio::io::copy(&mut &*video_data, &mut video_file).await?;
-    
-    info!("Video downloaded to temporary file: {}", video_path_str);
-    
-    // Now process the local file
-    process_local_video_to_gif(video_path_str).await
+    // Try the direct FFmpeg download and pipe approach
+    process_using_direct_url(&video_url).await
 }
 
-async fn process_local_video_to_gif(video_path: &str) -> Result<Bytes> {
-    info!("Converting local video to GIF: {}", video_path);
+async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
+    info!("Converting directly from URL using FFmpeg and gifski with yuv4mpegpipe");
 
-    // Create a temporary file for the GIF output with proper extension
-    let temp_dir = tempfile::tempdir()?;
-    let gif_path = temp_dir.path().join("output.gif");
-    let gif_path_str = gif_path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
-
-    // Use gifski directly on the video file (gifski uses FFmpeg internally)
-    let mut gifski_process = TokioCommand::new("gifski")
+    // Set up FFmpeg process to read directly from the URL and output yuv4mpegpipe
+    let mut ffmpeg_process = TokioCommand::new("ffmpeg")
         .args([
-            "--quality", "90",
-            "--fps", "25",
-            "--output", gif_path_str,
-            video_path,
+            "-i", video_url,        // Read directly from URL
+            "-f", "yuv4mpegpipe",   // Output in yuv4mpegpipe format
+            "-"                // Output to stdout
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
     
+    // Set up gifski process to read yuv4mpegpipe frames from stdin
+    let mut gifski_process = TokioCommand::new("gifski")
+        .args([
+            "--quality", "90",
+            "--fps", "25",
+            "--fast",
+            "-o",
+            "-"
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    
+    // Get stdin handle for gifski
+    let mut gifski_stdin = gifski_process.stdin.take()
+        .ok_or_else(|| anyhow!("Failed to get gifski stdin"))?;
+    
+    // Get stdout handle from ffmpeg
+    let mut ffmpeg_stdout = ffmpeg_process.stdout.take()
+        .ok_or_else(|| anyhow!("Failed to get ffmpeg stdout"))?;
+    
+    // Get stderr handles for logging
+    let mut ffmpeg_stderr = ffmpeg_process.stderr.take()
+        .ok_or_else(|| anyhow!("Failed to get ffmpeg stderr"))?;
     let mut gifski_stderr = gifski_process.stderr.take()
         .ok_or_else(|| anyhow!("Failed to get gifski stderr"))?;
-
-    // Collect stderr from gifski process
-    let gifski_stderr_future = async {
+    
+    // Pipe data from ffmpeg stdout to gifski stdin
+    let pipe_task = tokio::spawn(async move {
+        let mut buffer = [0u8; 65536]; // 64KB buffer
+        loop {
+            match ffmpeg_stdout.read(&mut buffer).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    if let Err(e) = gifski_stdin.write_all(&buffer[0..n]).await {
+                        return Err(anyhow!("Failed to write to gifski stdin: {}", e));
+                    }
+                },
+                Err(e) => return Err(anyhow!("Failed to read from ffmpeg stdout: {}", e)),
+            }
+        }
+        // Make sure to close stdin so gifski knows we're done
+        drop(gifski_stdin);
+        Ok(())
+    });
+    
+    // Collect stderr for debugging
+    let ffmpeg_stderr_task = tokio::spawn(async move {
         let mut buffer = Vec::new();
-        gifski_stderr.read_to_end(&mut buffer).await.unwrap_or(0);
-        String::from_utf8_lossy(&buffer).to_string()
-    };
-
-    // Wait for gifski to finish
+        ffmpeg_stderr.read_to_end(&mut buffer).await?;
+        Ok::<String, std::io::Error>(String::from_utf8_lossy(&buffer).to_string())
+    });
+    
+    let gifski_stderr_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        gifski_stderr.read_to_end(&mut buffer).await?;
+        Ok::<String, std::io::Error>(String::from_utf8_lossy(&buffer).to_string())
+    });
+    
+    // Wait for the pipe task with a timeout
+    match tokio::time::timeout(Duration::from_secs(30), pipe_task).await {
+        Ok(result) => {
+            if let Err(e) = result? {
+                return Err(anyhow!("Failed during FFmpeg to gifski piping: {}", e));
+            }
+        },
+        Err(_) => return Err(anyhow!("Timeout while piping data between processes")),
+    }
+    
+    // Wait for processes to complete
+    let ffmpeg_status = ffmpeg_process.wait().await?;
     let gifski_status = gifski_process.wait().await?;
-    let gifski_stderr_output = gifski_stderr_future.await;
+    
+    // Check stderr outputs if processes failed
+    if !ffmpeg_status.success() {
+        let stderr = ffmpeg_stderr_task.await??;
+        return Err(anyhow!("FFmpeg process failed: {}", stderr));
+    }
     
     if !gifski_status.success() {
-        error!("gifski stderr: {}", gifski_stderr_output);
-        return Err(anyhow!("gifski process failed: {}", gifski_stderr_output));
+        let stderr = gifski_stderr_task.await??;
+        return Err(anyhow!("gifski process failed: {}", stderr));
     }
-
-    // Read the GIF file into memory
-    let mut gif_file = tokio::fs::File::open(gif_path_str).await?;
+    
+    // Read the generated GIF file
     let mut gif_data = Vec::new();
-    gif_file.read_to_end(&mut gif_data).await?;
+    gifski_process.stdout.take().unwrap().read_to_end(&mut gif_data).await?;
 
     Ok(Bytes::from(gif_data))
 }
