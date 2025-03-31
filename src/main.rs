@@ -9,7 +9,7 @@ use axum::{
 use bytes::Bytes;
 use std::process::Stdio;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::Command as TokioCommand,
 };
 use tower_http::trace::TraceLayer;
@@ -83,7 +83,6 @@ async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
     // Set up gifski process to read yuv4mpegpipe frames from stdin and output to stdout
     let mut gifski_process = TokioCommand::new("gifski")
         .args([
-            "--fast",              // Fast encoding
             "--output", "/dev/stdout",       // Output to stdout
             "-"                    // Read from stdin
         ])
@@ -92,75 +91,109 @@ async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
         .stderr(Stdio::piped())
         .spawn()?;
     
-    // Get stdin handle for gifski
+    // Take ownership of the handles
     let mut gifski_stdin = gifski_process.stdin.take()
-        .ok_or_else(|| anyhow!("Failed to get gifski stdin"))?;
-    
-    // Get stdout handle from ffmpeg
+        .ok_or_else(|| anyhow!("Failed to take gifski stdin"))?;
     let mut ffmpeg_stdout = ffmpeg_process.stdout.take()
-        .ok_or_else(|| anyhow!("Failed to get ffmpeg stdout"))?;
-    
-    // Get output handle from gifski
+        .ok_or_else(|| anyhow!("Failed to take ffmpeg stdout"))?;
     let mut gifski_stdout = gifski_process.stdout.take()
-        .ok_or_else(|| anyhow!("Failed to get gifski stdout"))?;
+        .ok_or_else(|| anyhow!("Failed to take gifski stdout"))?;
+    let mut ffmpeg_stderr = ffmpeg_process.stderr.take()
+        .ok_or_else(|| anyhow!("Failed to take ffmpeg stderr"))?;
+    let mut gifski_stderr = gifski_process.stderr.take()
+        .ok_or_else(|| anyhow!("Failed to take gifski stderr"))?;
     
-    // Pipe data from ffmpeg stdout to gifski stdin - this is done in the main thread
-    // to avoid the complexity of task management
-    info!("Starting to pipe data from FFmpeg to gifski");
-    
-    // Use a heap-allocated buffer to avoid stack overflow
-    let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer on the heap
-    let mut total_bytes = 0;
-    
-    loop {
-        match ffmpeg_stdout.read(&mut buffer).await {
-            Ok(0) => {
-                info!("Reached end of FFmpeg output stream after {} bytes", total_bytes);
-                break; // EOF
-            },
-            Ok(n) => {
-                total_bytes += n;
-                if total_bytes % (1 * 1024 * 1024) == 0 { // Log every 1MB
-                    info!("Piped {} MB from FFmpeg to gifski", total_bytes / (1024 * 1024));
-                }
-                
-                gifski_stdin.write_all(&buffer[0..n]).await?;
-            },
-            Err(e) => return Err(anyhow!("Failed to read from ffmpeg stdout: {}", e)),
+    // --- Asynchronous Piping and Error Handling ---
+
+    // Task to pipe ffmpeg stdout to gifski stdin
+    let pipe_handle = tokio::spawn(async move {
+        info!("Starting pipe: ffmpeg stdout -> gifski stdin");
+        match tokio::io::copy(&mut ffmpeg_stdout, &mut gifski_stdin).await {
+            Ok(bytes_copied) => {
+                info!("Successfully piped {} bytes from ffmpeg to gifski", bytes_copied);
+                // Explicitly close gifski's stdin by dropping the handle after copying is done.
+                drop(gifski_stdin);
+                Ok(())
+            }
+            Err(e) => {
+                error!("Error piping data: {}", e);
+                Err(anyhow!("Failed to pipe data from ffmpeg to gifski: {}", e))
+            }
         }
-    }
-    
-    // Make sure to close stdin so gifski knows we're done
-    info!("Finished piping data, closing gifski stdin");
-    drop(gifski_stdin);
-    
-    // Collect the output from gifski
-    info!("Starting to collect gifski output");
-    let mut gif_data = Vec::new();
-    gifski_stdout.read_to_end(&mut gif_data).await?;
-    info!("Collected {} bytes of GIF data from gifski", gif_data.len());
-    
-    // Wait for processes to complete
+    });
+
+    // Task to read gifski stdout (the final GIF data)
+    let collect_handle = tokio::spawn(async move {
+        info!("Starting to collect gifski output");
+        let mut gif_data = Vec::new();
+        match gifski_stdout.read_to_end(&mut gif_data).await {
+            Ok(_) => {
+                info!("Collected {} bytes of GIF data from gifski", gif_data.len());
+                Ok(gif_data)
+            }
+            Err(e) => {
+                error!("Error reading gifski output: {}", e);
+                Err(anyhow!("Failed to read gifski output: {}", e))
+            }
+        }
+    });
+
+    // Task to log ffmpeg stderr
+    let ffmpeg_stderr_handle = tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(ffmpeg_stderr);
+        let mut line = String::new();
+        info!("Monitoring ffmpeg stderr...");
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            info!("[ffmpeg stderr] {}", line.trim_end());
+            line.clear();
+        }
+        info!("ffmpeg stderr stream finished.");
+    });
+
+    // Task to log gifski stderr
+    let gifski_stderr_handle = tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(gifski_stderr);
+        let mut line = String::new();
+        info!("Monitoring gifski stderr...");
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            info!("[gifski stderr] {}", line.trim_end());
+            line.clear();
+        }
+        info!("gifski stderr stream finished.");
+    });
+
+
+    // --- Wait for all operations ---
+
+    // Wait for the piping to complete
+    pipe_handle.await??; // Double '?' to handle JoinError and the inner Result
+    info!("Pipe operation completed successfully.");
+
+    // Wait for gifski to finish and collect its output
+    let gif_data = collect_handle.await??;
+    info!("GIF data collection completed successfully.");
+
+
+    // Wait for the processes to exit and check their statuses
     let ffmpeg_status = ffmpeg_process.wait().await?;
-    let gifski_status = gifski_process.wait().await?;
-    
-    // Check process exit statuses
+    info!("ffmpeg process exited with status: {}", ffmpeg_status);
     if !ffmpeg_status.success() {
-        let mut buffer = Vec::new();
-        if let Ok(stderr) = ffmpeg_process.stderr.unwrap().read_to_end(&mut buffer).await {
-            return Err(anyhow!("FFmpeg process failed: {}", String::from_utf8_lossy(&buffer)));
-        }
-        return Err(anyhow!("FFmpeg process failed with no stderr output"));
+        // Stderr is now logged concurrently, but we still signal failure
+        return Err(anyhow!("FFmpeg process failed with exit code: {:?}", ffmpeg_status.code()));
     }
-    
+
+    let gifski_status = gifski_process.wait().await?;
+    info!("gifski process exited with status: {}", gifski_status);
     if !gifski_status.success() {
-        let mut buffer = Vec::new();
-        if let Ok(stderr) = gifski_process.stderr.unwrap().read_to_end(&mut buffer).await {
-            return Err(anyhow!("gifski process failed: {}", String::from_utf8_lossy(&buffer)));
-        }
-        return Err(anyhow!("gifski process failed with no stderr output"));
+        // Stderr is now logged concurrently
+        return Err(anyhow!("gifski process failed with exit code: {:?}", gifski_status.code()));
     }
-    
+
+    // Wait for stderr logging tasks to finish (optional, but good practice)
+    ffmpeg_stderr_handle.await?;
+    gifski_stderr_handle.await?;
+    info!("Stderr monitoring tasks finished.");
+
     info!("Successfully generated GIF with {} bytes", gif_data.len());
     Ok(Bytes::from(gif_data))
 }
