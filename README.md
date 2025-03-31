@@ -1,6 +1,6 @@
 # FastGIF
 
-A Rust-based service to quickly turn X/Twitter mp4s to GIFs on the fly
+A Rust-based service to quickly convert X/Twitter mp4s to GIFs on the fly
 
 Basically, how this works is:
 - You pass along video.twimg.com URLs
