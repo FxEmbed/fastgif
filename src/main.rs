@@ -68,8 +68,7 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
 
 async fn process_tweet_video(path: &str) -> Result<Bytes> {
     let video_url = format!("https://video.twimg.com/tweet_video/{}", path);
-    info!("Processing video from URL: {}", video_url);
-    info!("Downloading video from {}", video_url);
+    info!("Processing video from {}", video_url);
 
     // Set up FFmpeg process to read directly from the URL and output yuv4mpegpipe
     let mut ffmpeg_process = TokioCommand::new("ffmpeg")
@@ -86,6 +85,7 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
     let mut gifski_process = TokioCommand::new("gifski")
         .args([
             "--output", "-", 
+            "--fast",
             "-"                    // Read from stdin
         ])
         .stdin(Stdio::piped())
@@ -164,9 +164,6 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
         }
         info!("gifski stderr stream finished.");
     });
-
-
-    // --- Wait for all operations (Concurrent Handling) ---
 
     // Wait for the piping and collection tasks to complete.
     // It's often better to wait for results before waiting for process exit,
