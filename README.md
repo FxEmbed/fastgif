@@ -1,12 +1,14 @@
 # FastGIF
 
-A Rust web server that converts Twitter videos to GIFs on the fly. This service:
-- Takes Twitter video URLs through a simple API
-- Downloads and processes videos using FFmpeg
-- Converts videos to GIFs using gifski
-- Streams the result back to the client
+A Rust-based service to quickly turn X/Twitter mp4s to GIFs on the fly
 
-## Requirements
+Basically, how this works is:
+- You pass along video.twimg.com URLs
+- Your video is downloaded and converted into raw yuv4mpegpipe using FFmpeg
+- [gifski](https://github.com/ImageOptim/gifski) takes the video piped into it and converts it into a GIF
+- The resulting GIF is transferred back to the client as soon as it's done
+
+## Build Requirements
 
 - Rust (latest stable version)
 - FFmpeg (must be installed and available in PATH)
@@ -75,12 +77,6 @@ http://localhost:3000/tweet_video/FfyEjQ_WIAAd7rg.mp4
 
 The server will respond with a GIF of the video.
 
-## Performance
-
-This service uses streaming where possible to minimize latency:
-- FFmpeg streams video data directly to gifski
-- The resulting GIF is sent back to the client as soon as it's ready
-
 ## Configuration
 
-The server runs on port 3000 by default. 
+The server runs on port 3000 by default. You can customize it using the PORT environment variable.

@@ -14,11 +14,17 @@ use tokio::{
 };
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
+use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
     info!("Starting FastGIF server");
+
+    // Read port from environment variable or use default
+    let port = env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(3000);
 
     // Our router
     let app = Router::new()
@@ -26,8 +32,9 @@ async fn main() -> Result<()> {
         .fallback(handle_not_found)
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    info!("Listening on http://localhost:3000");
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!("Listening on http://{}", listener.local_addr()?);
     axum::serve(listener, app).await?;
 
     Ok(())
