@@ -8,7 +8,7 @@ Basically, how this works is:
 - [gifski](https://github.com/ImageOptim/gifski) takes the video piped into it and converts it into a GIF
 - The resulting GIF is transferred back to the client as soon as it's done
 
-## Build Requirements
+## Requirements
 
 - Rust (latest stable version)
 - FFmpeg (must be installed and available in PATH)
