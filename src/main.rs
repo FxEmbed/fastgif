@@ -8,8 +8,6 @@ use axum::{
 };
 use bytes::Bytes;
 use std::process::Stdio;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::fs as tokio_fs;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt},
     process::Command as TokioCommand,
@@ -22,12 +20,12 @@ async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
     info!("Starting FastGIF server");
-    // Build our application with a route
+
+    // Our router
     let app = Router::new()
         .route("/tweet_video/:path", get(handle_tweet_video))
         .layer(TraceLayer::new_for_http());
 
-    // Run it with hyper on localhost:3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     info!("Listening on http://localhost:3000");
     axum::serve(listener, app).await?;
@@ -41,25 +39,13 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     match process_tweet_video(&path).await {
         Ok(gif_data) => {
             info!("Successfully converted video to GIF ({} bytes)", gif_data.len());
-
-            // --- DEBUG: Save collected bytes to a file --- 
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let debug_filename = format!("/tmp/fastgif_debug_{}_{}.gif", 
-                path.split('/').last().unwrap_or("unknown").replace(".mp4", ""), 
-                timestamp);
-            info!("Saving debug GIF to: {}", debug_filename);
-            match tokio_fs::write(&debug_filename, &gif_data).await {
-                Ok(_) => info!("Successfully saved debug GIF."),
-                Err(e) => error!("Failed to save debug GIF: {}", e),
-            }
-            // --- END DEBUG ---
-            
             (
                 StatusCode::OK,
-                [("Content-Type", "image/gif"), ("Cache-Control", "public, max-age=31536000")],
+                [
+                    ("Content-Type", "image/gif"),
+                    ("X-Powered-By", "fastgif"),
+                    ("Cache-Control", "public, max-age=31536000")
+                ],
                 gif_data,
             )
                 .into_response()
@@ -109,9 +95,9 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
         .ok_or_else(|| anyhow!("Failed to take ffmpeg stdout"))?;
     let mut gifski_stdout = gifski_process.stdout.take()
         .ok_or_else(|| anyhow!("Failed to take gifski stdout"))?;
-    let mut ffmpeg_stderr = ffmpeg_process.stderr.take()
+    let ffmpeg_stderr = ffmpeg_process.stderr.take()
         .ok_or_else(|| anyhow!("Failed to take ffmpeg stderr"))?;
-    let mut gifski_stderr = gifski_process.stderr.take()
+    let gifski_stderr = gifski_process.stderr.take()
         .ok_or_else(|| anyhow!("Failed to take gifski stderr"))?;
     
     // --- Asynchronous Piping and Error Handling ---
