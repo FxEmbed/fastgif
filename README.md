@@ -14,7 +14,11 @@ Basically, how this works is:
 - FFmpeg (must be installed and available in PATH)
 - gifski (must be installed and available in PATH)
 
-## Installation
+## Installation (easy mode)
+
+[just use the docker image :D](https://github.com/FxEmbed/fastgif/pkgs/container/fastgif)
+
+## Installation (hard mode)
 
 ### Install Dependencies
 
