@@ -18,7 +18,6 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    info!("hello world!");
     // Initialize tracing
     tracing_subscriber::fmt::init();
     info!("Starting FastGIF server");
