@@ -46,7 +46,6 @@ async fn main() -> Result<()> {
     // Build our application with a route
     let app = Router::new()
         .route("/*path", get(handle_tweet_video))
-        .route("/test", get(handle_test_video))
         .layer(TraceLayer::new_for_http());
 
     // Run it with hyper on localhost:3000
@@ -74,53 +73,6 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to process video: {}", e),
-            )
-                .into_response()
-        }
-    }
-}
-
-async fn handle_test_video() -> Response {
-    info!("Processing test video");
-    // Create a temporary file for test input with a proper extension
-    let temp_dir = tempfile::tempdir().unwrap();
-    let video_path = temp_dir.path().join("test_video.mp4");
-    
-    // Create a small test video using ffmpeg
-    let status = TokioCommand::new("ffmpeg")
-        .args([
-            "-f", "lavfi",
-            "-i", "testsrc=duration=3:size=320x240:rate=30",
-            "-pix_fmt", "yuv420p",
-            "-t", "3",
-            video_path.to_str().unwrap(),
-        ])
-        .status()
-        .await;
-    
-    if let Err(e) = status {
-        error!("Failed to create test video: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create test video: {}", e),
-        ).into_response();
-    }
-    
-    match process_local_video_to_gif(video_path.to_str().unwrap()).await {
-        Ok(gif_data) => {
-            info!("Successfully converted test video to GIF");
-            (
-                StatusCode::OK,
-                [("Content-Type", "image/gif")],
-                gif_data,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("Failed to process test video: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to process test video: {}", e),
             )
                 .into_response()
         }
