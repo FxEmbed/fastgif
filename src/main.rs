@@ -11,7 +11,7 @@ use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt},
     process::Command as TokioCommand,
 };
 use tower_http::trace::TraceLayer;
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
 async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     info!("Processing video: {}", path);
     
-    match process_video_to_gif(&path).await {
+    match process_tweet_video(&path).await {
         Ok(gif_data) => {
             info!("Successfully converted video to GIF ({} bytes)", gif_data.len());
 
@@ -75,21 +75,15 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     }
 }
 
-async fn process_video_to_gif(path: &str) -> Result<Bytes> {
+async fn process_tweet_video(path: &str) -> Result<Bytes> {
     let video_url = format!("https://video.twimg.com/tweet_video/{}", path);
     info!("Processing video from URL: {}", video_url);
-    
-    // Try the direct FFmpeg download and pipe approach
-    process_using_direct_url(&video_url).await
-}
-
-async fn process_using_direct_url(video_url: &str) -> Result<Bytes> {
     info!("Downloading video from {}", video_url);
 
     // Set up FFmpeg process to read directly from the URL and output yuv4mpegpipe
     let mut ffmpeg_process = TokioCommand::new("ffmpeg")
         .args([
-            "-i", video_url,        // Read directly from URL
+            "-i", &video_url,        // Read directly from URL
             "-f", "yuv4mpegpipe",   // Output in yuv4mpegpipe format
             "-"                     // Output to stdout
         ])
