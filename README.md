@@ -8,19 +8,17 @@ Basically, how this works is:
 - [gifski](https://github.com/ImageOptim/gifski) takes the video piped into it and converts it into a GIF
 - The resulting GIF is transferred back to the client as soon as it's done
 
-## Requirements
-
-- Rust (latest stable version)
-- FFmpeg (must be installed and available in PATH)
-- gifski (must be installed and available in PATH)
-
 ## Installation (easy mode)
 
 [just use the docker image :D](https://github.com/FxEmbed/fastgif/pkgs/container/fastgif)
 
 ## Installation (hard mode)
 
-### Install Dependencies
+## Dependencies
+
+- Rust (latest stable version)
+- FFmpeg (must be installed and available in PATH)
+- gifski (must be installed and available in PATH)
 
 #### FFmpeg
 
