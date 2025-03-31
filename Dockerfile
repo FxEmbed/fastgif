@@ -5,7 +5,7 @@
 FROM rust:1.85-alpine AS builder
 
 # Install build dependencies if needed (e.g., for linking)
-# RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev
 
 WORKDIR /usr/src/fastgif
 
