@@ -88,7 +88,8 @@ jobs:
       - name: Create and push manifest
         run: |
           # Create manifest for each tag
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          IFS=' ' read -ra TAGS <<< "${{ steps.meta.outputs.tags }}"
+          for tag in "${TAGS[@]}"; do
             docker manifest create $tag \
               --amend ghcr.io/${{ github.repository }}:$tag-amd64 \
               --amend ghcr.io/${{ github.repository }}:$tag-arm64
