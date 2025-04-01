@@ -67,15 +67,17 @@ jobs:
           
       - name: Create and push manifest
         run: |
-          SHA_TAG=$(echo ${{ github.sha }} | cut -c1-7)
           # Convert repository name to lowercase
           REPO_NAME="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           
+          # Get short SHA (7 characters)
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          
           # Create and push SHA manifest
-          docker manifest create $REPO_NAME:sha-$SHA_TAG \
-            $REPO_NAME:amd64-sha-$SHA_TAG \
-            $REPO_NAME:arm64-sha-$SHA_TAG
-          docker manifest push $REPO_NAME:sha-$SHA_TAG
+          docker manifest create $REPO_NAME:$SHORT_SHA \
+            $REPO_NAME:amd64-$SHORT_SHA \
+            $REPO_NAME:arm64-$SHORT_SHA
+          docker manifest push $REPO_NAME:$SHORT_SHA
           
           # Create and push latest manifest
           docker manifest create $REPO_NAME:latest \
