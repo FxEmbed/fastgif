@@ -3,11 +3,14 @@ name: Docker Publish
 on:
   push:
     branches:
-      - main
+      - main # Or your default branch
+    # Optionally trigger on tag pushes as well
+    # tags:
+    #   - 'v*.*.*'
 
 permissions:
   contents: read
-  packages: write
+  packages: write # Needed to push to GHCR
 
 jobs:
   build:
@@ -34,79 +37,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for platform
-        id: meta_build
+      - name: Extract metadata (tags, labels)
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=sha,pattern={{sha}}-{{platform}},format=short
-            type=raw,value=latest-{{platform}},enable={{is_default_branch}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push platform-specific Docker image
-        id: build-push
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/${{ matrix.platform }} # Build only the target platform
+          platforms: linux/${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta_build.outputs.tags }}
-          labels: ${{ steps.meta_build.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=build-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=build-${{ matrix.platform }}
-
-  create_manifest:
-    # Run after all matrix builds are successful
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create and push manifest list
-        run: |
-          set -ex # Exit on error, print commands
-          IMAGE_BASE="ghcr.io/${{ github.repository }}"
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          TAG_SHA="sha-${SHORT_SHA}" # Final SHA tag: sha-<shortsha>
-          TAG_LATEST="latest"       # Final latest tag: latest
-
-          # --- Create and push SHA manifest ---
-          IMG_AMD64_SHA="${IMAGE_BASE}:${SHORT_SHA}-amd64"
-          IMG_ARM64_SHA="${IMAGE_BASE}:${SHORT_SHA}-arm64"
-          FINAL_IMG_SHA="${IMAGE_BASE}:${TAG_SHA}"
-
-          echo "Creating manifest ${FINAL_IMG_SHA} from ${IMG_AMD64_SHA} and ${IMG_ARM64_SHA}"
-          docker manifest create "${FINAL_IMG_SHA}" \
-            "${IMG_AMD64_SHA}" \
-            "${IMG_ARM64_SHA}"
-          # Annotate AMD64 (optional but good practice)
-          docker manifest annotate --arch amd64 "${FINAL_IMG_SHA}" "${IMG_AMD64_SHA}"
-          # Annotate ARM64 (optional but good practice)
-          docker manifest annotate --arch arm64 "${FINAL_IMG_SHA}" "${IMG_ARM64_SHA}"
-          # Push the final SHA manifest
-          docker manifest push "${FINAL_IMG_SHA}"
-
-          # --- Create and push latest manifest (only for default branch) ---
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            IMG_AMD64_LATEST="${IMAGE_BASE}:latest-amd64"
-            IMG_ARM64_LATEST="${IMAGE_BASE}:latest-arm64"
-            FINAL_IMG_LATEST="${IMAGE_BASE}:${TAG_LATEST}"
-
-            echo "Creating manifest ${FINAL_IMG_LATEST} from ${IMG_AMD64_LATEST} and ${IMG_ARM64_LATEST}"
-            docker manifest create "${FINAL_IMG_LATEST}" \
-              "${IMG_AMD64_LATEST}" \
-              "${IMG_ARM64_LATEST}"
-            # Annotate AMD64 (optional but good practice)
-            docker manifest annotate --arch amd64 "${FINAL_IMG_LATEST}" "${IMG_AMD64_LATEST}"
-            # Annotate ARM64 (optional but good practice)
-            docker manifest annotate --arch arm64 "${FINAL_IMG_LATEST}" "${IMG_ARM64_LATEST}"
-            # Push the final latest manifest
-            docker manifest push "${FINAL_IMG_LATEST}"
-          else
-            echo "Not on default branch, skipping latest manifest push."
-          fi
