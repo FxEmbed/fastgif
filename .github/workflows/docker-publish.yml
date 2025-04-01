@@ -3,10 +3,7 @@ name: Docker Publish
 on:
   push:
     branches:
-      - main # Or your default branch
-    # Optionally trigger on tag pushes as well
-    # tags:
-    #   - 'v*.*.*'
+      - main
 
 permissions:
   contents: read
@@ -43,8 +40,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=${{ matrix.platform }}-
+            type=raw,value=${{ matrix.platform }}-latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
