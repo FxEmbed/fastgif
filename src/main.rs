@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result, Error};
+use anyhow::{anyhow, Result};
 use axum::{
     extract::Path,
     http::{StatusCode, Uri},
@@ -57,6 +57,7 @@ async fn handle_not_found(uri: Uri) -> impl IntoResponse {
 async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     info!("Processing video: {}", path);
     // replace .gif with .mp4 in URL. Discord seems to be picky about file extensions...?
+    // god i hope they don't only render gifs from tenor...
     let path = path.replace(".gif", ".mp4");
     
     match process_tweet_video(&path).await {
