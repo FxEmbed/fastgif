@@ -1,4 +1,4 @@
-# FastGIF
+# FxEmbed FastGIF
 
 A Rust-based service to quickly convert X/Twitter mp4s to GIFs on the fly
 
