@@ -34,14 +34,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=sha,prefix=${{ matrix.platform }}-
-            type=raw,value=${{ matrix.platform }}-latest,enable={{is_default_branch}}
+      - name: Get SHA tag
+        id: sha_tag
+        run: echo "short_sha=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -49,10 +44,13 @@ jobs:
           context: .
           platforms: linux/${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ matrix.platform }}-${{ steps.sha_tag.outputs.short_sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ matrix.platform }}-latest
           cache-from: type=gha,scope=build-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=build-${{ matrix.platform }}
+          # Disable provenance attestation which creates manifest lists
+          provenance: false
 
   create-manifest:
     needs: build
@@ -64,23 +62,36 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get SHA tag
+        id: sha_tag
+        run: echo "short_sha=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_OUTPUT
           
-      - name: Create and push manifest
+      - name: Install Docker CLI plugins
         run: |
-          # Convert repository name to lowercase
-          REPO_NAME="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
-          
-          # Get short SHA (7 characters)
-          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          mkdir -p ~/.docker/cli-plugins
+          curl -SL https://github.com/docker/buildx/releases/download/v0.11.2/buildx-v0.11.2.linux-amd64 -o ~/.docker/cli-plugins/docker-buildx
+          curl -SL https://github.com/docker/manifest/releases/download/v1.0.3/docker-manifest.linux-amd64 -o ~/.docker/cli-plugins/docker-manifest
+          chmod +x ~/.docker/cli-plugins/docker-buildx
+          chmod +x ~/.docker/cli-plugins/docker-manifest
+          docker manifest --help
+
+      - name: Create and push manifests
+        run: |
+          # Convert repository name to lowercase (Docker requirement)
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER}/${REPO}"
+          SHA="${{ steps.sha_tag.outputs.short_sha }}"
           
           # Create and push SHA manifest
-          docker manifest create $REPO_NAME:$SHORT_SHA \
-            $REPO_NAME:amd64-$SHORT_SHA \
-            $REPO_NAME:arm64-$SHORT_SHA
-          docker manifest push $REPO_NAME:$SHORT_SHA
+          docker manifest create ${IMAGE}:${SHA} \
+            ${IMAGE}:amd64-${SHA} \
+            ${IMAGE}:arm64-${SHA}
+          docker manifest push ${IMAGE}:${SHA}
           
           # Create and push latest manifest
-          docker manifest create $REPO_NAME:latest \
-            $REPO_NAME:amd64-latest \
-            $REPO_NAME:arm64-latest
-          docker manifest push $REPO_NAME:latest
+          docker manifest create ${IMAGE}:latest \
+            ${IMAGE}:amd64-latest \
+            ${IMAGE}:arm64-latest
+          docker manifest push ${IMAGE}:latest
