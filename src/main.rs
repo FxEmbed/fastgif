@@ -54,12 +54,12 @@ async fn handle_not_found(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("404 Not Found: {}", uri))
 }
 
-async fn handle_tweet_video(Path(path): Path<String>) -> Response {
-    info!("Processing video: {}", path);
+async fn handle_tweet_video(Path(raw_path): Path<String>) -> Response {
+    info!("Processing video: {}", raw_path);
     // replace .gif with .mp4 in URL. Discord seems to be picky about file extensions...?
     // god i hope they don't only render gifs from tenor...
-    let path = path.replace(".gif", ".mp4");
-    
+    let path = raw_path.replace(".gif", ".mp4");
+    info!("New path: {}", path);
     match process_tweet_video(&path).await {
         Ok(gif_data) => {
             info!("Successfully converted video to GIF ({} bytes)", gif_data.len());
