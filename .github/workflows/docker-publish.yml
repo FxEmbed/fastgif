@@ -68,7 +68,8 @@ jobs:
       - name: Create and push manifest
         run: |
           SHA_TAG=$(echo ${{ github.sha }} | cut -c1-7)
-          REPO_NAME="ghcr.io/${{ github.repository }}"
+          # Convert repository name to lowercase
+          REPO_NAME="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           
           # Create and push SHA manifest
           docker manifest create $REPO_NAME:sha-$SHA_TAG \
