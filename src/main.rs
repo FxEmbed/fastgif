@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result, Error};
 use axum::{
     extract::Path,
     http::{StatusCode, Uri},
@@ -13,11 +13,20 @@ use tokio::{
     process::Command as TokioCommand,
 };
 use tower_http::trace::TraceLayer;
-use tracing::{error, info};
+use tracing::{error, info, Level};
 use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize logging with a pretty format
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_ansi(true)
+        .init();
+
     info!("Starting FastGIF server");
 
     // Read port from environment variable or use default
@@ -64,9 +73,11 @@ async fn handle_tweet_video(Path(path): Path<String>) -> Response {
         }
         Err(e) => {
             error!("Failed to process video: {}", e);
+            let error_message = format!("Failed to process video: {}\n\nStack trace:\n{}", 
+                e, e.chain().map(|e| e.to_string()).collect::<Vec<_>>().join("\n"));
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to process video: {}", e),
+                error_message,
             )
                 .into_response()
         }
@@ -86,7 +97,8 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .map_err(|e| anyhow!("Failed to spawn ffmpeg process: {}", e))?;
     
     // Set up gifski process to read yuv4mpegpipe frames from stdin and output to stdout
     let mut gifski_process = TokioCommand::new("gifski")
@@ -120,7 +132,6 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
         match tokio::io::copy(&mut ffmpeg_stdout, &mut gifski_stdin).await {
             Ok(bytes_copied) => {
                 info!("Successfully piped {} bytes from ffmpeg to gifski", bytes_copied);
-                // Explicitly close gifski's stdin by dropping the handle after copying is done.
                 drop(gifski_stdin);
                 Ok(())
             }
@@ -184,13 +195,15 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
     info!("Pipe and collect tasks completed successfully.");
 
     // Now, wait for the processes to exit and check their statuses.
-    let ffmpeg_status = ffmpeg_process.wait().await?;
+    let ffmpeg_status = ffmpeg_process.wait().await
+        .map_err(|e| anyhow!("Failed to wait for ffmpeg process: {}", e))?;
     info!("ffmpeg process exited with status: {}", ffmpeg_status);
     if !ffmpeg_status.success() {
         return Err(anyhow!("FFmpeg process failed with exit code: {:?}", ffmpeg_status.code()));
     }
 
-    let gifski_status = gifski_process.wait().await?;
+    let gifski_status = gifski_process.wait().await
+        .map_err(|e| anyhow!("Failed to wait for gifski process: {}", e))?;
     info!("gifski process exited with status: {}", gifski_status);
     if !gifski_status.success() {
         return Err(anyhow!("gifski process failed with exit code: {:?}", gifski_status.code()));
@@ -198,8 +211,10 @@ async fn process_tweet_video(path: &str) -> Result<Bytes> {
     info!("ffmpeg and gifski processes completed successfully.");
 
     // Wait for stderr logging tasks to finish.
-    ffmpeg_stderr_handle.await?;
-    gifski_stderr_handle.await?;
+    ffmpeg_stderr_handle.await
+        .map_err(|e| anyhow!("Failed to wait for ffmpeg stderr task: {}", e))?;
+    gifski_stderr_handle.await
+        .map_err(|e| anyhow!("Failed to wait for gifski stderr task: {}", e))?;
     info!("Stderr monitoring tasks finished.");
 
     info!("Successfully generated GIF with {} bytes", gif_data.len());
