@@ -56,6 +56,8 @@ async fn handle_not_found(uri: Uri) -> impl IntoResponse {
 
 async fn handle_tweet_video(Path(path): Path<String>) -> Response {
     info!("Processing video: {}", path);
+    // replace .gif with .mp4 in URL. Discord seems to be picky about file extensions...?
+    let path = path.replace(".gif", ".mp4");
     
     match process_tweet_video(&path).await {
         Ok(gif_data) => {
