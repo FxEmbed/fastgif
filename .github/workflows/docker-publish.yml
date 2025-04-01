@@ -41,7 +41,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=sha,prefix=${{ matrix.platform }}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ matrix.platform }}-latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -53,3 +53,31 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=build-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=build-${{ matrix.platform }}
+
+  create-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Create and push manifest
+        run: |
+          SHA_TAG=$(echo ${{ github.sha }} | cut -c1-7)
+          REPO_NAME="ghcr.io/${{ github.repository }}"
+          
+          # Create and push SHA manifest
+          docker manifest create $REPO_NAME:sha-$SHA_TAG \
+            $REPO_NAME:amd64-sha-$SHA_TAG \
+            $REPO_NAME:arm64-sha-$SHA_TAG
+          docker manifest push $REPO_NAME:sha-$SHA_TAG
+          
+          # Create and push latest manifest
+          docker manifest create $REPO_NAME:latest \
+            $REPO_NAME:amd64-latest \
+            $REPO_NAME:arm64-latest
+          docker manifest push $REPO_NAME:latest
